@@ -2,13 +2,14 @@
   "name": "b2b-sales-agent-frontend",
   "private": true,
   "version": "1.0.0",
+  "license": "MIT",
   "type": "module",
   "description": "B2B 销售 Agent 前端看板（React 18 + Vite + TypeScript + Tailwind + TanStack Query）",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b",
     "lint": "eslint ."
   },
   "dependencies": {
