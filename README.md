@@ -1,10 +1,19 @@
 # B2B Sales Agent —— 端到端销售自动化 Agent
 
+[![CI](https://github.com/regulus9787/b2b-sales-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/regulus9787/b2b-sales-agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-152%20passed-brightgreen)](#7-测试与评估)
+[![Coverage](https://img.shields.io/badge/coverage-94.76%25%20statements-brightgreen)](#7-测试与评估)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)](tsconfig.json)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-339933)](package.json)
+
 > 线索导入 → LLM 生成个性化开发信 → 客户状态管理 → 模拟客户回复 → LLM 意图分类 → 自动更新状态 → React 看板可视化
 
 一个**可运行、可演示、可测试**的完整项目：TypeScript strict + Express 5 + better-sqlite3 + Zod + pino + Vitest/Supertest + Swagger 后端，React 18 + Vite + Tailwind + TanStack Query 前端，Docker 一键部署。
 
 **零密钥可跑通全流程**：`LLM_API_KEY` 为空时自动进入 Mock 模式（确定性邮件生成 + 规则意图分类器，分类准确率 92.31% / 26 条标注样本）。
+
+**CI 全程零成本**：GitHub Actions 在 Mock 模式下跑完类型检查、Lint、152 个测试、覆盖率与意图评估，不消耗任何 LLM 额度。
 
 ---
 
@@ -439,7 +448,7 @@ curl http://localhost:3000/api/dashboard/stats
 | `npm run agent:run -- --customer 1 --intent interested` | CLI 跑工作流 |
 | `npm run eval:intent` | 意图分类评估（26 条标注样本，输出准确率） |
 | `npx tsx scripts/compare-llm-modes.ts 1` | 同客户 Mock vs 真实模型横向对比 |
-| `npm test` | 运行 150 个测试 |
+| `npm test` | 运行 152 个测试 |
 | `npm run test:coverage` | 覆盖率报告（阈值：核心 service ≥80%） |
 | `npm run openapi` | 导出 `docs/openapi.json` |
 | `npm run lint` | ESLint |
@@ -450,7 +459,7 @@ curl http://localhost:3000/api/dashboard/stats
 ## 7. 测试与评估
 
 ```bash
-npm test              # 150 个测试全部通过
+npm test              # 152 个测试全部通过
 npm run test:coverage # 覆盖率报告（文本 + HTML + lcov）
 npm run eval:intent   # 意图分类准确率（26 条标注样本）
 ```
@@ -465,10 +474,11 @@ npx tsx scripts/compare-llm-modes.ts 1   # 同客户双模式横向对比
 覆盖率实测（核心 service ≥ 80% 达标）：
 
 ```
-All files       | % Stmts 95.04 | % Branch 78.58 | % Funcs 91.40 | % Lines 95.04
- core           |        97.45 |         91.80 |        96.42 |        97.45
- services       |        95.41 |         80.74 |        89.85 |        95.41
- harness        |        94.24 |         67.16 |       100.00 |        94.24
+All files       | % Stmts 94.76 | % Branch 78.48 | % Funcs 91.53 | % Lines 94.76
+ core           |        97.50 |         91.80 |        96.42 |        97.50
+ services       |        94.86 |         80.54 |        90.14 |        94.86
+ harness        |        94.29 |         67.16 |       100.00 |        94.29
+ db             |        88.34 |         69.56 |        70.00 |        88.34
 ```
 
 `npm run eval:intent` 输出（Mock 规则分类器）：
@@ -496,12 +506,17 @@ PASS：准确率阈值 80%（可用 EVAL_MIN_ACCURACY 调整）
 .
 ├── AGENTS.md                 # Harness 规范（本项目的开发契约）
 ├── README.md
+├── LICENSE                   # MIT
+├── VERIFICATION.md           # 实测验证记录与修复复盘
 ├── package.json              # 后端（CommonJS）
 ├── tsconfig.json             # strict + noUncheckedIndexedAccess
-├── vitest.config.ts          # forks 池（better-sqlite3 原生模块适配）
+├── vitest.config.ts          # forks 池 + 强制 Mock 模式（tests/setup.ts）
+├── eslint.config.mjs / .prettierrc.json
+├── .gitattributes            # 统一换行符策略
 ├── Dockerfile                # 后端多阶段镜像
 ├── docker-compose.yml        # 后端 + 前端
 ├── .env.example
+├── .github/workflows/ci.yml  # CI：类型检查 / Lint / 测试 / 覆盖率 / 评估 / 构建
 ├── src
 │   ├── index.ts              # 入口：迁移预热 + 优雅退出
 │   ├── app.ts                # Express 5 装配（中间件顺序即安全边界）
@@ -538,6 +553,7 @@ PASS：准确率阈值 80%（可用 EVAL_MIN_ACCURACY 调整）
 5. **Mock 模式是第一等公民**：无密钥可演示、可 CI、可测试；`mock` 标记贯穿 `email_messages.mock`、`replies.mock`、`llm_calls.mock`，看板单独展示"其中 N 次为 Mock 调用"。
 6. **工具协议化**：Agent 工具用 Zod 双 schema 约束输入/输出，Runner 统一校验 + 落库，新增工具零改动编排层。
 7. **可测试性设计**：DB 单例可注入（`setDb`）、fetch 可注入（`fetchImpl`）、Mock 可覆盖（`mock`/`apiKey` 选项），因此超时/重试/限流都能在单测里确定性验证。
+8. **CI 与本地一致且零成本**：`tests/setup.ts` 强制 Mock 模式，CI 跑完整质量门禁也不触发任何真实 LLM 调用；需要真实调用的场景一律用 per-call 覆盖显式声明。
 
 ---
 
@@ -551,4 +567,4 @@ PASS：准确率阈值 80%（可用 EVAL_MIN_ACCURACY 调整）
 
 ## 11. License
 
-MIT
+[MIT](LICENSE) © 2026 Jeremy Wang

@@ -561,7 +561,7 @@
           },
           "model": {
             "type": "string",
-            "example": "deepseek-chat"
+            "example": "deepseek-flash"
           },
           "prompt_tokens": {
             "type": "integer"
