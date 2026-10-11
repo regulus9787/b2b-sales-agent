@@ -41,6 +41,21 @@ jobs:
             package-lock.json
             frontend/package-lock.json
 
+      # 关键：锁定 npm 大版本，与开发环境（npm 11）保持一致。
+      # 原因：swagger-jsdoc@6.3.0 把传递依赖 yaml 精确锁在预发布版 2.0.0-1
+      #      （不能升级：其代码调用 yaml 的 CST 内部 API，2.x 稳定版已移除 keepCstNodes）。
+      #      npm 10 与 npm 11 对「预发布版本能否满足依赖范围」的判定不同，
+      #      导致 npm 10 下 `npm ci` 误报 "Missing: yaml@2.9.1 from lock file"。
+      - name: 统一 npm 版本（与本地锁文件生成版本一致）
+        run: |
+          npm install -g npm@11 --no-audit --no-fund
+          npm --version
+
+      - name: 显示环境版本
+        run: |
+          node --version
+          npm --version
+
       - name: 安装后端依赖
         run: npm ci --no-audit --no-fund
 
