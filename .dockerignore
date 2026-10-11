@@ -1,0 +1,16 @@
+node_modules
+frontend
+frontend/node_modules
+dist
+coverage
+.git
+.gitignore
+*.db
+*.db-wal
+*.db-shm
+.env
+logs
+docs
+postman
+tests
+*.log

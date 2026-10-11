@@ -1,0 +1,886 @@
+{
+  "info": {
+    "_postman_id": "b2b5a1e0-7c4d-4a6f-9f2b-1d8e5c3a9f10",
+    "name": "B2B Sales Agent API",
+    "description": "端到端 B2B 销售 Agent 接口集合。\n\n覆盖：健康检查 → 客户列表/详情 → 线索导入 → 生成开发信 → 回复分类 → Agent 工作流 → 执行详情 → 看板统计。\n\n运行前请先启动后端：npm run dev（默认 http://localhost:3000）。\nLLM_API_KEY 为空时自动进入 Mock 模式，无需任何密钥即可全部跑通。\n\n建议执行顺序：\n1) Health / Health Check\n2) Customers / List Customers（将首个客户 id 写入集合变量 customerId）\n3) Leads / Import Leads\n4) Email / Generate Email\n5) Reply / Analyze Reply (Simulate)\n6) Agent / Run Full Cycle\n7) Agent / Get Run Detail\n8) Dashboard / Get Stats",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string",
+      "description": "后端地址"
+    },
+    {
+      "key": "customerId",
+      "value": "1",
+      "type": "string",
+      "description": "目标客户 ID（List Customers 会自动写入）"
+    },
+    {
+      "key": "runId",
+      "value": "",
+      "type": "string",
+      "description": "Agent 执行 ID（Run Full Cycle 会自动写入）"
+    },
+    {
+      "key": "status",
+      "value": "new",
+      "type": "string",
+      "description": "客户状态过滤条件"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// 统一注入请求 ID，便于与服务端日志/events 表对齐",
+          "if (!pm.request.headers.has('x-request-id')) {",
+          "  const rid = 'pm-' + Date.now() + '-' + Math.random().toString(16).slice(2, 10);",
+          "  pm.request.headers.add({ key: 'x-request-id', value: rid });",
+          "  pm.collectionVariables.set('lastRequestId', rid);",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('success = true', () => pm.expect(body.success).to.be.true);",
+                  "pm.test('meta.request_id 存在', () => pm.expect(body.meta.request_id).to.be.a('string').and.not.empty);",
+                  "pm.test('数据库正常', () => pm.expect(body.data.database).to.eql('ok'));",
+                  "pm.test('注册了 5 个 Agent 工具', () => pm.expect(body.data.agent_tools).to.have.lengthOf(5));",
+                  "console.log('LLM 模式:', body.data.llm.mode, '| schema 版本:', body.data.schema_version);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "健康检查：返回服务状态、schema 版本、LLM 模式（mock/live）与已注册工具。"
+          }
+        },
+        {
+          "name": "API Index",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('返回端点清单', () => pm.expect(body.data.endpoints).to.be.an('array').that.is.not.empty);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": ["{{baseUrl}}"],
+              "path": [""]
+            },
+            "description": "根路径：服务信息与可用接口清单。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Customers",
+      "item": [
+        {
+          "name": "List Customers",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('success = true', () => pm.expect(body.success).to.be.true);",
+                  "pm.test('分页字段完整', () => {",
+                  "  pm.expect(body.data.pagination).to.include.keys('page', 'pageSize', 'total', 'totalPages');",
+                  "});",
+                  "pm.test('返回客户数组', () => pm.expect(body.data.items).to.be.an('array'));",
+                  "if (body.data.items.length > 0) {",
+                  "  pm.collectionVariables.set('customerId', String(body.data.items[0].id));",
+                  "  console.log('已选中客户:', body.data.items[0].id, body.data.items[0].company_name);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/customers?page=1&pageSize=10&sortBy=score&sortOrder=desc",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "customers"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "10" },
+                { "key": "sortBy", "value": "score" },
+                { "key": "sortOrder", "value": "desc" }
+              ]
+            },
+            "description": "客户列表：分页 + 排序。可追加 status / search / minScore 参数。"
+          }
+        },
+        {
+          "name": "List Customers (Filter by Status)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('状态过滤生效', () => {",
+                  "  body.data.items.forEach((item) => pm.expect(item.status).to.eql(pm.collectionVariables.get('status')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/customers?status={{status}}&page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "customers"],
+              "query": [
+                { "key": "status", "value": "{{status}}" },
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "20" }
+              ]
+            },
+            "description": "按状态过滤客户（可用集合变量 status 切换）。"
+          }
+        },
+        {
+          "name": "Get Customer Detail",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('客户信息存在', () => pm.expect(body.data.customer.id).to.be.a('number'));",
+                  "pm.test('详情包含邮件/回复/时间线/LLM 调用', () => {",
+                  "  pm.expect(body.data).to.include.keys('emails', 'replies', 'timeline', 'events', 'llm_calls', 'allowed_transitions');",
+                  "});",
+                  "console.log('状态:', body.data.customer.status, '| 允许跳转:', body.data.allowed_transitions.join(', '));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/customers/{{customerId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "customers", "{{customerId}}"]
+            },
+            "description": "客户详情：邮件、回复、状态时间线、LLM 调用明细与下一步建议。"
+          }
+        },
+        {
+          "name": "Get Status Machine",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('包含 11 个状态', () => pm.expect(body.data.statuses).to.have.lengthOf(11));",
+                  "pm.test('new 只能跳到 enriched', () => pm.expect(body.data.transitions.new).to.eql(['enriched']));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/customers/status-machine",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "customers", "status-machine"]
+            },
+            "description": "状态机定义：状态枚举、合法跳转表、终态、中文标签。"
+          }
+        },
+        {
+          "name": "Get Customer Detail (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "const body = pm.response.json();",
+                  "pm.test('错误码为 CUSTOMER_NOT_FOUND', () => pm.expect(body.error.code).to.eql('CUSTOMER_NOT_FOUND'));",
+                  "pm.test('统一失败信封', () => {",
+                  "  pm.expect(body.success).to.be.false;",
+                  "  pm.expect(body.meta.request_id).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/customers/999999",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "customers", "999999"]
+            },
+            "description": "错误路径验证：客户不存在时返回 404 + CUSTOMER_NOT_FOUND。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Leads",
+      "item": [
+        {
+          "name": "Import Leads",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('返回导入统计', () => {",
+                  "  pm.expect(body.data).to.include.keys('imported', 'duplicated', 'total', 'leads');",
+                  "});",
+                  "pm.test('评分结果有效', () => {",
+                  "  const lead = body.data.leads[0];",
+                  "  pm.expect(lead.score).to.be.within(0, 100);",
+                  "  pm.expect(lead.score_reason).to.be.a('string').and.not.empty;",
+                  "});",
+                  "if (body.data.leads[0]) {",
+                  "  pm.collectionVariables.set('customerId', String(body.data.leads[0].customer_id));",
+                  "}",
+                  "console.log('导入结果:', body.data.imported, '新增 /', body.data.duplicated, '重复');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leads\": [\n    {\n      \"company_name\": \"Postman Test Robotics\",\n      \"contact_name\": \"Postman Tester\",\n      \"email\": \"postman.tester@test-robotics.example.com\",\n      \"phone\": \"+86-10-8899-1122\",\n      \"website\": \"https://test-robotics.example.com\",\n      \"industry\": \"工业机器人\",\n      \"country\": \"CN\",\n      \"company_size\": \"100-500\",\n      \"notes\": \"Postman 导入，明确采购需求，预算已批\"\n    }\n  ],\n  \"source\": \"postman\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/leads/import",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "leads", "import"]
+            },
+            "description": "批量导入线索（去重 + 规则评分）。重复执行同一份数据会返回 duplicated: 1。"
+          }
+        },
+        {
+          "name": "Import Leads + Run Workflow",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('导入成功', () => pm.expect(body.data.total).to.be.at.least(1));",
+                  "pm.test('工作流已执行', () => pm.expect(body.data.workflow).to.not.be.null);",
+                  "if (body.data.workflow && body.data.workflow.customers.length > 0) {",
+                  "  pm.collectionVariables.set('customerId', String(body.data.workflow.customers[0].customer_id));",
+                  "  console.log('工作流状态:', body.data.workflow.customers[0].status, '| 目标状态:', body.data.workflow.customers[0].to_status);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leads\": [\n    {\n      \"company_name\": \"Postman Workflow Analytics\",\n      \"contact_name\": \"Workflow Owner\",\n      \"email\": \"workflow.owner@postman-analytics.example.com\",\n      \"industry\": \"数据服务\",\n      \"country\": \"SG\",\n      \"company_size\": \"50-100\",\n      \"notes\": \"希望评估销售自动化，明确合作意向\"\n    }\n  ],\n  \"source\": \"postman\",\n  \"run_workflow\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/leads/import",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "leads", "import"]
+            },
+            "description": "导入线索后立即执行完整工作流（评分 → 生成邮件 → 模拟回复 → 意图分类 → 状态推进）。"
+          }
+        },
+        {
+          "name": "List Leads",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('分页结构正确', () => pm.expect(body.data.pagination.total).to.be.at.least(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/leads?page=1&pageSize=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "leads"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "10" }
+              ]
+            },
+            "description": "线索列表（分页 / 搜索）。"
+          }
+        },
+        {
+          "name": "Import Leads (Validation Error)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test('错误码为 VALIDATION_ERROR', () => pm.expect(body.error.code).to.eql('VALIDATION_ERROR'));",
+                  "pm.test('返回字段级 details', () => pm.expect(body.error.details.issues).to.be.an('array').that.is.not.empty);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leads\": []\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/leads/import",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "leads", "import"]
+            },
+            "description": "错误路径验证：空线索数组返回 400 + VALIDATION_ERROR（含字段级 details）。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Email",
+      "item": [
+        {
+          "name": "Generate Email",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('邮件内容非空', () => {",
+                  "  pm.expect(body.data.subject).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.data.body.length).to.be.above(50);",
+                  "});",
+                  "pm.test('记录 token 与耗时', () => {",
+                  "  pm.expect(body.data.prompt_tokens).to.be.at.least(0);",
+                  "  pm.expect(body.data.completion_tokens).to.be.at.least(0);",
+                  "  pm.expect(body.data.latency_ms).to.be.at.least(0);",
+                  "});",
+                  "pm.test('状态推进到 contacted', () => pm.expect(body.data.to_status).to.eql('contacted'));",
+                  "console.log('主题:', body.data.subject);",
+                  "console.log('模型:', body.data.model, '| tokens:', body.data.prompt_tokens + '/' + body.data.completion_tokens, '| 耗时:', body.data.latency_ms + 'ms', '| prompt 版本:', body.data.prompt_version);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"send\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/generate/{{customerId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "generate", "{{customerId}}"]
+            },
+            "description": "生成个性化开发信并模拟发送：new → enriched → email_drafted → contacted，每一步都写 events。"
+          }
+        },
+        {
+          "name": "Generate Email (Draft Only)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('草稿模式停在 email_drafted 或已推进', () => {",
+                  "  pm.expect(['email_drafted', 'contacted', 'replied', 'interested', 'needs_info', 'rejected', 'neutral', 'meeting_booked', 'closed']).to.include(body.data.to_status);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"send\": false,\n  \"sender_name\": \"Postman SDR\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/generate/{{customerId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "generate", "{{customerId}}"]
+            },
+            "description": "只生成草稿（send: false），状态停在 email_drafted。"
+          }
+        },
+        {
+          "name": "List Customer Emails",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('返回邮件数组', () => pm.expect(body.data.emails).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/email/customer/{{customerId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "customer", "{{customerId}}"]
+            },
+            "description": "查询某客户的全部邮件记录。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reply",
+      "item": [
+        {
+          "name": "Analyze Reply (Simulate)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('意图分类结果合法', () => {",
+                  "  pm.expect(['interested', 'needs_info', 'rejected', 'neutral']).to.include(body.data.classification.intent);",
+                  "  pm.expect(body.data.classification.confidence).to.be.within(0, 1);",
+                  "});",
+                  "pm.test('记录模型与 token', () => {",
+                  "  pm.expect(body.data.model).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.data.prompt_tokens).to.be.at.least(0);",
+                  "});",
+                  "console.log('意图:', body.data.classification.intent, '| 置信度:', body.data.classification.confidence, '| 状态:', body.data.from_status, '->', body.data.to_status);",
+                  "console.log('建议动作:', body.data.classification.suggested_action);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"simulate\": true,\n  \"intent\": \"interested\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reply/analyze/{{customerId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reply", "analyze", "{{customerId}}"]
+            },
+            "description": "生成模拟客户回复并做意图分类，自动推进状态（replied → 意图状态）。"
+          }
+        },
+        {
+          "name": "Analyze Reply (Real Text)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('simulated = false', () => pm.expect(body.data.simulated).to.be.false);",
+                  "pm.test('意图为 interested', () => pm.expect(body.data.classification.intent).to.eql('interested'));",
+                  "pm.test('包含摘要与建议', () => {",
+                  "  pm.expect(body.data.classification.summary).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.data.classification.suggested_action).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"你好，我们对这个方案很感兴趣。下周二下午方便安排一次 30 分钟线上演示吗？我会拉上销售运营负责人一起参加。\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reply/analyze/{{customerId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reply", "analyze", "{{customerId}}"]
+            },
+            "description": "分析真实客户回复文本（严格 JSON + Zod enum 校验）。"
+          }
+        },
+        {
+          "name": "List Customer Replies",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('返回回复数组', () => pm.expect(body.data.replies).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reply/customer/{{customerId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reply", "customer", "{{customerId}}"]
+            },
+            "description": "查询某客户的全部回复与分类结果。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Agent",
+      "item": [
+        {
+          "name": "List Tools",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('注册 5 个工具', () => pm.expect(body.data.tool_names).to.have.lengthOf(5));",
+                  "pm.test('包含 3 条工作流', () => pm.expect(body.data.workflows).to.have.lengthOf(3));",
+                  "pm.test('工具名符合规范', () => {",
+                  "  pm.expect(body.data.tool_names).to.include.members(['import_leads', 'score_lead', 'generate_email', 'classify_reply', 'suggest_next_action']);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agent/tools",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "agent", "tools"]
+            },
+            "description": "已注册的 Agent 工具与可用工作流清单。"
+          }
+        },
+        {
+          "name": "Run Full Cycle",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('工作流成功', () => pm.expect(body.data.status).to.eql('succeeded'));",
+                  "pm.test('至少执行 4 步', () => pm.expect(body.data.steps.length).to.be.at.least(4));",
+                  "pm.test('每步都有摘要', () => {",
+                  "  body.data.steps.forEach((step) => pm.expect(step.summary).to.be.a('string').and.not.empty);",
+                  "});",
+                  "pm.test('记录了 tokens 与耗时', () => {",
+                  "  pm.expect(body.data.total_tokens).to.be.at.least(0);",
+                  "  pm.expect(body.data.duration_ms).to.be.at.least(0);",
+                  "});",
+                  "pm.test('客户状态推进到意图状态', () => {",
+                  "  const customer = body.data.output.customers[0];",
+                  "  pm.expect(customer.to_status).to.eql('interested');",
+                  "});",
+                  "pm.collectionVariables.set('runId', body.data.run_id);",
+                  "console.log('run_id:', body.data.run_id, '| 步骤:', body.data.steps.length, '| tokens:', body.data.total_tokens, '| 耗时:', body.data.duration_ms + 'ms');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workflow\": \"full_cycle\",\n  \"customer_id\": {{customerId}},\n  \"simulate_intent\": \"interested\",\n  \"send_email\": true,\n  \"trigger\": \"postman\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agent/run",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "agent", "run"]
+            },
+            "description": "完整工作流：score_lead → generate_email → send → receive_reply → classify_reply → update_status。"
+          }
+        },
+        {
+          "name": "Run Import And Draft",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('工作流成功', () => pm.expect(body.data.status).to.eql('succeeded'));",
+                  "pm.test('导入步骤存在', () => {",
+                  "  pm.expect(body.data.steps.map((s) => s.tool)).to.include('import_leads');",
+                  "});",
+                  "pm.test('生成了邮件', () => pm.expect(body.data.output.totals.emails).to.be.at.least(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workflow\": \"import_and_draft\",\n  \"limit\": 2,\n  \"send_email\": true,\n  \"trigger\": \"postman\",\n  \"leads\": [\n    {\n      \"company_name\": \"Postman Draft Alpha\",\n      \"contact_name\": \"Alpha Owner\",\n      \"email\": \"alpha.owner@postman-draft-alpha.example.com\",\n      \"industry\": \"新能源\",\n      \"country\": \"DE\",\n      \"company_size\": \"200-500\",\n      \"notes\": \"明确合作意向\"\n    },\n    {\n      \"company_name\": \"Postman Draft Beta\",\n      \"contact_name\": \"Beta Owner\",\n      \"email\": \"beta.owner@postman-draft-beta.example.com\",\n      \"industry\": \"消费电子制造\",\n      \"country\": \"CN\",\n      \"company_size\": \"500-1000\",\n      \"notes\": \"需要更多信息与报价\"\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agent/run",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "agent", "run"]
+            },
+            "description": "导入线索 → 评分 → 生成开发信（不模拟回复）。"
+          }
+        },
+        {
+          "name": "Get Run Detail",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('返回步骤明细', () => pm.expect(body.data.steps).to.be.an('array').that.is.not.empty);",
+                  "pm.test('步骤包含输入与输出', () => {",
+                  "  const step = body.data.steps[0];",
+                  "  pm.expect(step).to.include.keys('tool', 'status', 'input', 'output', 'duration_ms');",
+                  "});",
+                  "pm.test('包含 LLM 调用明细', () => {",
+                  "  if (body.data.llm_calls.length > 0) {",
+                  "    const call = body.data.llm_calls[0];",
+                  "    pm.expect(call).to.include.keys('operation', 'model', 'prompt_tokens', 'completion_tokens', 'latency_ms', 'cost_usd');",
+                  "  }",
+                  "});",
+                  "console.log('流程:', body.data.workflow, '| 状态:', body.data.status, '| 步骤:', body.data.steps_count, '| LLM 调用:', body.data.llm_calls_count);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agent/runs/{{runId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "agent", "runs", "{{runId}}"]
+            },
+            "description": "Agent 执行详情：每一步的输入/输出、LLM 调用明细（token/耗时/成本）与相关事件。"
+          }
+        },
+        {
+          "name": "List Agent Runs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('返回执行记录', () => pm.expect(body.data.pagination.total).to.be.at.least(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agent/runs?page=1&pageSize=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "agent", "runs"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "10" }
+              ]
+            },
+            "description": "Agent 执行记录列表（可按 customer_id / status 过滤）。"
+          }
+        },
+        {
+          "name": "Run Full Cycle (Validation Error)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test('错误码为 VALIDATION_ERROR', () => pm.expect(body.error.code).to.eql('VALIDATION_ERROR'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workflow\": \"full_cycle\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/agent/run",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "agent", "run"]
+            },
+            "description": "错误路径验证：full_cycle 缺少 customer_id 返回 400。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "Get Stats",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('统计字段完整', () => {",
+                  "  pm.expect(body.data).to.include.keys('total_customers', 'total_leads', 'total_emails', 'total_replies', 'by_status', 'funnel', 'llm', 'agent');",
+                  "});",
+                  "pm.test('状态卡片覆盖 11 个状态', () => pm.expect(body.data.by_status).to.have.lengthOf(11));",
+                  "pm.test('漏斗有 5 个阶段', () => pm.expect(body.data.funnel).to.have.lengthOf(5));",
+                  "console.log('客户:', body.data.total_customers, '| 邮件:', body.data.total_emails, '| 回复:', body.data.total_replies, '| 回复率:', body.data.replied_rate + '%');",
+                  "console.log('LLM 调用:', body.data.llm.calls, '| tokens:', body.data.llm.total_tokens, '| 成本:', body.data.llm.cost_usd, '| 模式:', body.data.llm_mode);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/dashboard/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "dashboard", "stats"]
+            },
+            "description": "看板统计：各状态客户数、转化漏斗、LLM 与 Agent 指标、最近事件。"
+          }
+        }
+      ]
+    }
+  ]
+}

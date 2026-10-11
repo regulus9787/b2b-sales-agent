@@ -1,0 +1,2270 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "B2B Sales Agent API",
+    "version": "1.0.0",
+    "description": "端到端 B2B 销售 Agent：线索导入 → LLM 个性化开发信 → 客户状态管理 → 模拟回复 → LLM 意图分类 → 自动更新状态。\n\n## 统一响应格式\n- 成功：`{ \"success\": true, \"data\": {...}, \"meta\": { \"request_id\": \"uuid\" } }`\n- 失败：`{ \"success\": false, \"error\": { \"code\": \"...\", \"message\": \"...\" }, \"meta\": { \"request_id\": \"uuid\" } }`\n\n## 错误码\n- `VALIDATION_ERROR` → HTTP 400\n- `CUSTOMER_NOT_FOUND` → HTTP 404\n- `LEAD_NOT_FOUND` → HTTP 404\n- `AGENT_RUN_NOT_FOUND` → HTTP 404\n- `INVALID_STATUS_TRANSITION` → HTTP 409\n- `DUPLICATE_RESOURCE` → HTTP 409\n- `LLM_TIMEOUT` → HTTP 504\n- `LLM_RATE_LIMIT` → HTTP 429\n- `LLM_INVALID_OUTPUT` → HTTP 502\n- `LLM_ERROR` → HTTP 502\n- `CONFIG_ERROR` → HTTP 500\n- `NOT_FOUND` → HTTP 404\n- `INTERNAL_ERROR` → HTTP 500\n\n## 客户状态机\n`new → enriched → email_drafted → contacted → replied`；\n`replied → interested | needs_info | rejected | neutral`；\n`interested → meeting_booked → closed`。\n非法跳转返回 HTTP 409 + `INVALID_STATUS_TRANSITION`。\n\n## Agent 工具\n- `import_leads`：批量导入线索：去重、评分、创建客户与线索记录，并写 lead_imported / lead_scored 事件。\n- `score_lead`：对指定客户做线索评分（规则评分 + 理由 + 信号），并写 lead_scored 事件。\n- `generate_email`：基于客户画像调用 LLM 生成个性化开发信，落库并推进状态（email_drafted → contacted）。\n- `classify_reply`：接收（或模拟生成）客户回复，通过 LLM 网关做意图分类，写入 replies 并推进状态（replied → 意图状态）。\n- `suggest_next_action`：基于客户状态、评分与最近意图，给出下一步最佳动作（LLM 生成，失败降级为规则建议）。\n\n## 工作流\n- `full_cycle`：完整链路：评分 → 生成开发信 → 模拟发送 → 模拟客户回复 → 意图分类 → 自动更新状态\n- `import_and_draft`：导入线索 → 评分 → 为前 N 个客户生成开发信（不模拟回复）\n- `classify_only`：只跑回复分类链路：模拟客户回复 → 意图分类 → 自动更新状态\n\n> LLM_API_KEY 为空时自动进入 Mock 模式，无需任何密钥即可跑通全流程。"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "本地开发"
+    },
+    {
+      "url": "/",
+      "description": "当前主机（Docker / 反向代理）"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Health",
+      "description": "健康检查"
+    },
+    {
+      "name": "Customers",
+      "description": "客户查询与详情"
+    },
+    {
+      "name": "Leads",
+      "description": "线索导入"
+    },
+    {
+      "name": "Email",
+      "description": "开发信生成"
+    },
+    {
+      "name": "Reply",
+      "description": "客户回复与意图分类"
+    },
+    {
+      "name": "Agent",
+      "description": "Agent 工作流"
+    },
+    {
+      "name": "Dashboard",
+      "description": "看板统计"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "预留：如需鉴权可在此配置（当前版本开放访问）"
+      }
+    },
+    "schemas": {
+      "Meta": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "request_id"
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "VALIDATION_ERROR",
+              "CUSTOMER_NOT_FOUND",
+              "LEAD_NOT_FOUND",
+              "AGENT_RUN_NOT_FOUND",
+              "INVALID_STATUS_TRANSITION",
+              "DUPLICATE_RESOURCE",
+              "LLM_TIMEOUT",
+              "LLM_RATE_LIMIT",
+              "LLM_INVALID_OUTPUT",
+              "LLM_ERROR",
+              "CONFIG_ERROR",
+              "NOT_FOUND",
+              "INTERNAL_ERROR"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "nullable": true
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "$ref": "#/components/schemas/Error"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "success",
+          "error",
+          "meta"
+        ]
+      },
+      "Pagination": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "example": 1
+          },
+          "pageSize": {
+            "type": "integer",
+            "example": 20
+          },
+          "total": {
+            "type": "integer",
+            "example": 42
+          },
+          "totalPages": {
+            "type": "integer",
+            "example": 3
+          }
+        }
+      },
+      "CustomerStatus": {
+        "type": "string",
+        "enum": [
+          "new",
+          "enriched",
+          "email_drafted",
+          "contacted",
+          "replied",
+          "interested",
+          "needs_info",
+          "rejected",
+          "neutral",
+          "meeting_booked",
+          "closed"
+        ],
+        "description": "new（新线索），enriched（已补全），email_drafted（邮件已起草），contacted（已触达），replied（已回复），interested（有意向），needs_info（需更多信息），rejected（已拒绝），neutral（中性），meeting_booked（已约会议），closed（已关闭）"
+      },
+      "Customer": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "example": 1
+          },
+          "company_name": {
+            "type": "string",
+            "example": "Shenzhen Nova Electronics Co., Ltd."
+          },
+          "contact_name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Kevin Zhang"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "kevin.zhang@nova-electronics.example.com"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "website": {
+            "type": "string",
+            "nullable": true
+          },
+          "industry": {
+            "type": "string",
+            "nullable": true,
+            "example": "消费电子制造"
+          },
+          "country": {
+            "type": "string",
+            "nullable": true,
+            "example": "CN"
+          },
+          "company_size": {
+            "type": "string",
+            "nullable": true,
+            "example": "500-1000"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CustomerStatus"
+          },
+          "score": {
+            "type": "integer",
+            "example": 82
+          },
+          "source": {
+            "type": "string",
+            "example": "seed"
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "last_contacted_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "last_replied_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "CustomerSummary": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Customer"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "emails_count": {
+                "type": "integer"
+              },
+              "replies_count": {
+                "type": "integer"
+              },
+              "last_intent": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "interested",
+                  "needs_info",
+                  "rejected",
+                  "neutral",
+                  null
+                ]
+              },
+              "last_event_at": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          }
+        ]
+      },
+      "EmailMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "customer_id": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "outbound",
+              "inbound"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "sent",
+              "failed"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "prompt_tokens": {
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "type": "integer"
+          },
+          "latency_ms": {
+            "type": "integer"
+          },
+          "mock": {
+            "type": "boolean"
+          },
+          "sent_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "Reply": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "customer_id": {
+            "type": "integer"
+          },
+          "email_message_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "body": {
+            "type": "string"
+          },
+          "intent": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "interested",
+              "needs_info",
+              "rejected",
+              "neutral",
+              null
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "nullable": true
+          },
+          "sentiment": {
+            "type": "string",
+            "nullable": true
+          },
+          "summary": {
+            "type": "string",
+            "nullable": true
+          },
+          "suggested_action": {
+            "type": "string",
+            "nullable": true
+          },
+          "needs_human": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "prompt_tokens": {
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "type": "integer"
+          },
+          "latency_ms": {
+            "type": "integer"
+          },
+          "mock": {
+            "type": "boolean"
+          },
+          "from_status": {
+            "$ref": "#/components/schemas/CustomerStatus"
+          },
+          "to_status": {
+            "$ref": "#/components/schemas/CustomerStatus"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "event_type": {
+            "type": "string",
+            "example": "status_changed"
+          },
+          "from_status": {
+            "type": "string",
+            "nullable": true
+          },
+          "to_status": {
+            "type": "string",
+            "nullable": true
+          },
+          "trigger": {
+            "type": "string",
+            "example": "classify_reply"
+          },
+          "run_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "actor": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "LeadImportItem": {
+        "type": "object",
+        "required": [
+          "company_name",
+          "email"
+        ],
+        "properties": {
+          "company_name": {
+            "type": "string",
+            "example": "Beijing Quantum Robotics"
+          },
+          "contact_name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Liu Yang"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "liu.yang@quantum-robotics.example.com"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "website": {
+            "type": "string",
+            "nullable": true
+          },
+          "industry": {
+            "type": "string",
+            "nullable": true,
+            "example": "工业机器人"
+          },
+          "country": {
+            "type": "string",
+            "nullable": true,
+            "example": "CN"
+          },
+          "company_size": {
+            "type": "string",
+            "nullable": true,
+            "example": "100-500"
+          },
+          "source": {
+            "type": "string",
+            "nullable": true,
+            "example": "webinar"
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "example": "展会收集，明确采购需求"
+          }
+        }
+      },
+      "AgentStep": {
+        "type": "object",
+        "properties": {
+          "step_index": {
+            "type": "integer"
+          },
+          "tool": {
+            "type": "string",
+            "enum": [
+              "import_leads",
+              "score_lead",
+              "generate_email",
+              "classify_reply",
+              "suggest_next_action"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "failed"
+            ]
+          },
+          "input": {
+            "type": "object",
+            "nullable": true
+          },
+          "output": {
+            "type": "object",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "LlmCall": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "generate_email",
+              "classify_intent",
+              "suggest_next_action"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "example": "deepseek"
+          },
+          "model": {
+            "type": "string",
+            "example": "deepseek-chat"
+          },
+          "prompt_tokens": {
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "type": "integer"
+          },
+          "total_tokens": {
+            "type": "integer"
+          },
+          "latency_ms": {
+            "type": "integer"
+          },
+          "cost_usd": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error",
+              "fallback"
+            ]
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "mock": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/reply/analyze/{customerId}": {
+      "post": {
+        "tags": [
+          "Reply"
+        ],
+        "summary": "分析客户回复并自动更新状态",
+        "description": "接收回复文本（或用 `simulate: true` 生成模拟回复），通过 LLM 网关做意图分类\n（严格 JSON + Zod enum 校验），写入 replies 表并推进状态：\n`contacted → replied → interested | needs_info | rejected | neutral`。\n\n分类失败时降级为 `neutral`（或规则兜底）并记录，不会中断链路。\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "customerId",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "body": {
+                    "type": "string",
+                    "description": "客户回复正文；不传且 simulate=true 时自动生成",
+                    "example": "你好，我们对这个方案很感兴趣，下周二方便安排一次演示吗？"
+                  },
+                  "intent": {
+                    "type": "string",
+                    "enum": [
+                      "interested",
+                      "needs_info",
+                      "rejected",
+                      "neutral"
+                    ],
+                    "description": "指定模拟回复的意图（仅 simulate 时生效）"
+                  },
+                  "simulate": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "email_message_id": {
+                    "type": "integer",
+                    "description": "关联的邮件 ID"
+                  },
+                  "run_id": {
+                    "type": "string"
+                  },
+                  "force": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "强制刷新状态"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "分类与状态更新结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "customer_id": {
+                          "type": "integer"
+                        },
+                        "reply_id": {
+                          "type": "integer"
+                        },
+                        "reply_body": {
+                          "type": "string"
+                        },
+                        "simulated": {
+                          "type": "boolean"
+                        },
+                        "classification": {
+                          "type": "object",
+                          "properties": {
+                            "intent": {
+                              "type": "string",
+                              "enum": [
+                                "interested",
+                                "needs_info",
+                                "rejected",
+                                "neutral"
+                              ]
+                            },
+                            "confidence": {
+                              "type": "number",
+                              "example": 0.82
+                            },
+                            "sentiment": {
+                              "type": "string",
+                              "enum": [
+                                "positive",
+                                "neutral",
+                                "negative"
+                              ]
+                            },
+                            "summary": {
+                              "type": "string"
+                            },
+                            "suggested_action": {
+                              "type": "string"
+                            },
+                            "needs_human": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "provider": {
+                          "type": "string"
+                        },
+                        "model": {
+                          "type": "string"
+                        },
+                        "prompt_tokens": {
+                          "type": "integer"
+                        },
+                        "completion_tokens": {
+                          "type": "integer"
+                        },
+                        "latency_ms": {
+                          "type": "integer"
+                        },
+                        "cost_usd": {
+                          "type": "number"
+                        },
+                        "mock": {
+                          "type": "boolean"
+                        },
+                        "prompt_version": {
+                          "type": "string"
+                        },
+                        "fallback": {
+                          "type": "boolean"
+                        },
+                        "from_status": {
+                          "type": "string"
+                        },
+                        "to_status": {
+                          "type": "string"
+                        },
+                        "status_changed": {
+                          "type": "boolean"
+                        },
+                        "status_change_error": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "客户不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reply/customer/{customerId}": {
+      "get": {
+        "tags": [
+          "Reply"
+        ],
+        "summary": "查询某客户的全部回复与分类结果",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "customerId",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "回复列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "customer": {
+                          "$ref": "#/components/schemas/CustomerSummary"
+                        },
+                        "replies": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Reply"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/leads/import": {
+      "post": {
+        "tags": [
+          "Leads"
+        ],
+        "summary": "批量导入线索（去重 + 评分）",
+        "description": "按 `email + company_name` 归一化哈希去重。已存在的线索返回 `deduplicated: true`。\n设置 `run_workflow: true` 时，导入后会立即为前若干客户执行「评分 → 生成开发信」工作流。\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "leads"
+                ],
+                "properties": {
+                  "leads": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "items": {
+                      "$ref": "#/components/schemas/LeadImportItem"
+                    }
+                  },
+                  "source": {
+                    "type": "string",
+                    "example": "webinar"
+                  },
+                  "score": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "run_workflow": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              },
+              "examples": {
+                "single": {
+                  "value": {
+                    "leads": [
+                      {
+                        "company_name": "Beijing Quantum Robotics",
+                        "contact_name": "Liu Yang",
+                        "email": "liu.yang@quantum-robotics.example.com",
+                        "industry": "工业机器人",
+                        "country": "CN",
+                        "company_size": "100-500",
+                        "notes": "展会收集，明确采购需求"
+                      }
+                    ],
+                    "source": "webinar"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "导入结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "imported": {
+                          "type": "integer",
+                          "example": 1
+                        },
+                        "duplicated": {
+                          "type": "integer",
+                          "example": 0
+                        },
+                        "total": {
+                          "type": "integer",
+                          "example": 1
+                        },
+                        "workflow": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "run_id": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "succeeded",
+                                "failed"
+                              ]
+                            },
+                            "steps": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/AgentStep"
+                              }
+                            }
+                          }
+                        },
+                        "customers": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/CustomerSummary"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "校验失败（VALIDATION_ERROR）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/leads": {
+      "get": {
+        "tags": [
+          "Leads"
+        ],
+        "summary": "线索列表（分页 / 搜索）",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "线索列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        },
+                        "pagination": {
+                          "$ref": "#/components/schemas/Pagination"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "健康检查",
+        "description": "返回服务状态、数据库 schema 版本、LLM 模式与已注册的 Agent 工具。",
+        "responses": {
+          "200": {
+            "description": "服务正常",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "uptime_s": {
+                          "type": "number",
+                          "example": 12.34
+                        },
+                        "version": {
+                          "type": "string",
+                          "example": "1.0.0"
+                        },
+                        "env": {
+                          "type": "string",
+                          "example": "development"
+                        },
+                        "database": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "schema_version": {
+                          "type": "integer",
+                          "example": 2
+                        },
+                        "llm": {
+                          "type": "object",
+                          "properties": {
+                            "mode": {
+                              "type": "string",
+                              "enum": [
+                                "mock",
+                                "live"
+                              ]
+                            },
+                            "provider": {
+                              "type": "string",
+                              "example": "mock"
+                            },
+                            "model": {
+                              "type": "string",
+                              "example": "mock"
+                            },
+                            "timeout_ms": {
+                              "type": "integer",
+                              "example": 30000
+                            },
+                            "max_retries": {
+                              "type": "integer",
+                              "example": 3
+                            }
+                          }
+                        },
+                        "agent_tools": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/email/generate/{customerId}": {
+      "post": {
+        "tags": [
+          "Email"
+        ],
+        "summary": "为指定客户生成个性化开发信（并模拟发送）",
+        "description": "调用 LLM 网关（services/llm.ts）生成开发信，落库 email_messages，\n并推进状态：`new → enriched → email_drafted →（send=true）contacted`。\n所有状态变更都会写入 events 表。\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "customerId",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sender_name": {
+                    "type": "string",
+                    "example": "Alex Chen"
+                  },
+                  "pain_point": {
+                    "type": "string",
+                    "example": "海外渠道线索转化率低"
+                  },
+                  "value_prop": {
+                    "type": "string"
+                  },
+                  "language": {
+                    "type": "string",
+                    "default": "中文为主，保留英文专业术语"
+                  },
+                  "send": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "是否模拟发送并推进到 contacted"
+                  },
+                  "run_id": {
+                    "type": "string",
+                    "description": "关联的 Agent run"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "生成结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "customer_id": {
+                          "type": "integer"
+                        },
+                        "email_id": {
+                          "type": "integer"
+                        },
+                        "subject": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "draft",
+                            "sent"
+                          ]
+                        },
+                        "provider": {
+                          "type": "string"
+                        },
+                        "model": {
+                          "type": "string"
+                        },
+                        "prompt_tokens": {
+                          "type": "integer"
+                        },
+                        "completion_tokens": {
+                          "type": "integer"
+                        },
+                        "latency_ms": {
+                          "type": "integer"
+                        },
+                        "cost_usd": {
+                          "type": "number"
+                        },
+                        "mock": {
+                          "type": "boolean"
+                        },
+                        "prompt_version": {
+                          "type": "string",
+                          "example": "v1.2.0"
+                        },
+                        "from_status": {
+                          "type": "string"
+                        },
+                        "to_status": {
+                          "type": "string"
+                        },
+                        "status_changed": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "客户不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "非法状态跳转（INVALID_STATUS_TRANSITION）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "LLM 错误（LLM_ERROR / LLM_INVALID_OUTPUT）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/email/customer/{customerId}": {
+      "get": {
+        "tags": [
+          "Email"
+        ],
+        "summary": "查询某客户的全部邮件记录",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "customerId",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "邮件列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "customer": {
+                          "$ref": "#/components/schemas/CustomerSummary"
+                        },
+                        "emails": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/EmailMessage"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/stats": {
+      "get": {
+        "tags": [
+          "Dashboard"
+        ],
+        "summary": "看板统计（各状态客户数量、漏斗、LLM/Agent 指标）",
+        "responses": {
+          "200": {
+            "description": "统计数据",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "total_customers": {
+                          "type": "integer",
+                          "example": 10
+                        },
+                        "by_status": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "status": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "count": {
+                                "type": "integer"
+                              }
+                            }
+                          }
+                        },
+                        "total_leads": {
+                          "type": "integer"
+                        },
+                        "total_emails": {
+                          "type": "integer"
+                        },
+                        "total_replies": {
+                          "type": "integer"
+                        },
+                        "replied_rate": {
+                          "type": "number",
+                          "example": 30
+                        },
+                        "interested_rate": {
+                          "type": "number",
+                          "example": 10
+                        },
+                        "avg_score": {
+                          "type": "number"
+                        },
+                        "llm": {
+                          "type": "object",
+                          "properties": {
+                            "calls": {
+                              "type": "integer"
+                            },
+                            "prompt_tokens": {
+                              "type": "integer"
+                            },
+                            "completion_tokens": {
+                              "type": "integer"
+                            },
+                            "total_tokens": {
+                              "type": "integer"
+                            },
+                            "cost_usd": {
+                              "type": "number"
+                            },
+                            "avg_latency_ms": {
+                              "type": "integer"
+                            },
+                            "errors": {
+                              "type": "integer"
+                            },
+                            "fallbacks": {
+                              "type": "integer"
+                            },
+                            "mock_calls": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        "agent": {
+                          "type": "object",
+                          "properties": {
+                            "runs": {
+                              "type": "integer"
+                            },
+                            "succeeded": {
+                              "type": "integer"
+                            },
+                            "failed": {
+                              "type": "integer"
+                            },
+                            "avg_duration_ms": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        "intents": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        },
+                        "funnel": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        },
+                        "recent_events": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Event"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers": {
+      "get": {
+        "tags": [
+          "Customers"
+        ],
+        "summary": "客户列表（分页 / 状态过滤 / 搜索）",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerStatus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            },
+            "description": "模糊匹配公司名 / 邮箱 / 联系人 / 行业"
+          },
+          {
+            "in": "query",
+            "name": "minScore",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "sortBy",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created_at",
+                "updated_at",
+                "score",
+                "company_name"
+              ],
+              "default": "created_at"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sortOrder",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "客户列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/CustomerSummary"
+                          }
+                        },
+                        "pagination": {
+                          "$ref": "#/components/schemas/Pagination"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数校验失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers/status-machine": {
+      "get": {
+        "tags": [
+          "Customers"
+        ],
+        "summary": "获取客户状态机定义（状态、合法跳转、终态、中文标签）",
+        "responses": {
+          "200": {
+            "description": "状态机",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "statuses": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "transitions": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "terminal": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "labels": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers/{id}": {
+      "get": {
+        "tags": [
+          "Customers"
+        ],
+        "summary": "客户详情（含邮件、回复、状态时间线、LLM 调用与允许的下一步状态）",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "客户详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "customer": {
+                          "$ref": "#/components/schemas/CustomerSummary"
+                        },
+                        "emails": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/EmailMessage"
+                          }
+                        },
+                        "replies": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Reply"
+                          }
+                        },
+                        "timeline": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Event"
+                          }
+                        },
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Event"
+                          }
+                        },
+                        "llm_calls": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/LlmCall"
+                          }
+                        },
+                        "next_action": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "allowed_transitions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "客户不存在（CUSTOMER_NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/run": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "触发 Agent 工作流",
+        "description": "- `full_cycle`：score_lead → generate_email → send → receive_reply → classify_reply → update_status\n- `import_and_draft`：import_leads → score_lead → generate_email\n- `classify_only`：receive_reply → classify_reply → update_status\n\n执行结果写入 agent_runs 与 agent_run_steps，可用 `GET /api/agent/runs/{runId}` 查看每一步。\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "workflow": {
+                    "type": "string",
+                    "enum": [
+                      "full_cycle",
+                      "import_and_draft",
+                      "classify_only"
+                    ],
+                    "default": "full_cycle"
+                  },
+                  "customer_id": {
+                    "type": "integer",
+                    "example": 1
+                  },
+                  "leads": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/LeadImportItem"
+                    }
+                  },
+                  "simulate_intent": {
+                    "type": "string",
+                    "enum": [
+                      "interested",
+                      "needs_info",
+                      "rejected",
+                      "neutral"
+                    ]
+                  },
+                  "send_email": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "default": 1,
+                    "maximum": 50
+                  },
+                  "trigger": {
+                    "type": "string",
+                    "default": "api"
+                  }
+                }
+              },
+              "examples": {
+                "fullCycle": {
+                  "value": {
+                    "workflow": "full_cycle",
+                    "customer_id": 1,
+                    "simulate_intent": "interested"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "工作流执行结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "run_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "workflow": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "succeeded",
+                            "failed"
+                          ]
+                        },
+                        "customer_id": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "error": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "duration_ms": {
+                          "type": "integer"
+                        },
+                        "llm_calls_count": {
+                          "type": "integer"
+                        },
+                        "total_tokens": {
+                          "type": "integer"
+                        },
+                        "total_cost_usd": {
+                          "type": "number"
+                        },
+                        "steps": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "step_index": {
+                                "type": "integer"
+                              },
+                              "tool": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string"
+                              },
+                              "duration_ms": {
+                                "type": "integer"
+                              },
+                              "summary": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "output": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "customers": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "customer_id": {
+                                    "type": "integer"
+                                  },
+                                  "intent": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "from_status": {
+                                    "type": "string"
+                                  },
+                                  "to_status": {
+                                    "type": "string"
+                                  },
+                                  "next_action": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                }
+                              }
+                            },
+                            "totals": {
+                              "type": "object"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数校验失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "客户不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/tools": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "已注册的 Agent 工具与可用工作流",
+        "responses": {
+          "200": {
+            "description": "工具与工作流清单",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "tools": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "tool_names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "workflows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/runs": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Agent 执行记录列表",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          },
+          {
+            "in": "query",
+            "name": "customer_id",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "running",
+                "succeeded",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "执行记录",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        },
+                        "pagination": {
+                          "$ref": "#/components/schemas/Pagination"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/runs/{runId}": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Agent 执行详情（每一步的输入/输出 + LLM 调用明细 + 事件）",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "执行详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "run_id": {
+                          "type": "string"
+                        },
+                        "workflow": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "input": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "output": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "steps": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/AgentStep"
+                          }
+                        },
+                        "llm_calls": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/LlmCall"
+                          }
+                        },
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Event"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "执行记录不存在（AGENT_RUN_NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{"id":"r01","label":"interested","reply":"你好，感谢你的邮件。我们正在评估这块方案，下周二或周三下午方便安排一次 30 分钟线上演示吗？我会拉上销售运营负责人一起参加。"}
+{"id":"r02","label":"interested","reply":"Hi Alex, thanks for reaching out. This looks relevant to what we're doing. Let's schedule a call next week — does Thursday 3pm CET work?"}
+{"id":"r03","label":"interested","reply":"这个方案我们很感兴趣，能否先安排个演示？另外麻烦把报价单也发我一份。"}
+{"id":"r04","label":"interested","reply":"We would love to learn more. Can you send us the proposal and book a demo for our procurement team?"}
+{"id":"r05","label":"interested","reply":"我们有明确的合作意向，想进一步了解一下你们的交付周期和对接方式，方便约个电话沟通吗？"}
+{"id":"r06","label":"needs_info","reply":"收到，谢谢。想先了解一下更具体的信息：你们的价格是怎么计算的？按账号还是按线索量？另外有没有制造业客户的案例？"}
+{"id":"r07","label":"needs_info","reply":"Could you share the technical specification and security documentation? We need to review compliance before going further."}
+{"id":"r08","label":"needs_info","reply":"我们这边合规要求比较高，需要看技术文档和安全认证报告。方便发一份白皮书吗？"}
+{"id":"r09","label":"needs_info","reply":"How much does it cost per seat? Please send me the pricing sheet and a couple of case studies."}
+{"id":"r10","label":"needs_info","reply":"想请问一下你们的系统支持私有化部署吗？怎么收费？需要相关的技术规格说明。"}
+{"id":"r11","label":"rejected","reply":"你好，谢谢你的邮件。不过我们目前没有这方面的预算，而且已经在用一家供应商的方案，暂时不考虑更换。"}
+{"id":"r12","label":"rejected","reply":"Please remove me from your list and do not contact me again. We are not interested."}
+{"id":"r13","label":"rejected","reply":"感谢联系，但我们暂时不需要这类服务，请不要再发跟进邮件了。"}
+{"id":"r14","label":"rejected","reply":"We have no budget for this in 2025 and we already have a vendor. Not interested, thanks."}
+{"id":"r15","label":"rejected","reply":"这个我们目前不考虑，公司预算有限，退订。"}
+{"id":"r16","label":"neutral","reply":"收到，谢谢你的邮件。我大概看了一下，这块不是我主要负责的方向，我已经转发给相关的同事了。"}
+{"id":"r17","label":"neutral","reply":"Thanks for the email. Noted — I'll get back to you if anything comes up. Quite busy at the moment."}
+{"id":"r18","label":"neutral","reply":"谢谢来信，我这边最近比较忙，之后有机会再聊吧。"}
+{"id":"r19","label":"neutral","reply":"Received, thanks. Maybe later — we are in the middle of a reorganisation right now."}
+{"id":"r20","label":"neutral","reply":"已阅，稍后再联系。"}
+{"id":"r21","label":"needs_info","reply":"能先发一份详细的方案文档吗？我们想了解具体的实施周期、报价以及你们在新能源行业的成功案例。"}
+{"id":"r22","label":"interested","reply":"方案看起来不错，我们想进一步沟通合作细节。你看周五上午是否有空开个短会？"}
+{"id":"r23","label":"rejected","reply":"抱歉，我们的预算已经用完了，今年不会采购新的系统了。"}
+{"id":"r24","label":"interested","reply":"很感兴趣！能否安排个 demo，并把针对我们行业的 ROI 测算发给我？"}
+{"id":"r25","label":"neutral","reply":"邮件我看到了，已经转给我们的采购部门，后续他们会评估。"}
+{"id":"r26","label":"needs_info","reply":"What's the price for the enterprise tier? Also, do you have SOC 2 documentation?"}

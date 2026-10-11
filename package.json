@@ -1,0 +1,59 @@
+{
+  "name": "b2b-sales-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "端到端 B2B 销售 Agent：线索导入 → LLM 个性化开发信 → 客户状态管理 → 模拟回复 → LLM 意图分类 → 自动更新状态（Express 5 + better-sqlite3 + React 看板）",
+  "license": "MIT",
+  "author": "B2B Sales Agent Harness",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "init-db": "tsx src/db/init-db.ts",
+    "seed": "tsx src/db/init-db.ts --seed-only",
+    "reset-db": "tsx src/db/init-db.ts --reset",
+    "agent:run": "tsx src/harness/run-cli.ts",
+    "eval:intent": "tsx scripts/eval-intent.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.ts\" \"*.md\"",
+    "openapi": "tsx scripts/export-openapi.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "pino": "^10.1.0",
+    "pino-http": "^11.0.0",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.19.1",
+    "@types/supertest": "^6.0.3",
+    "@types/swagger-jsdoc": "^6.0.4",
+    "@types/swagger-ui-express": "^4.1.8",
+    "@vitest/coverage-v8": "^3.2.4",
+    "eslint": "^9.39.1",
+    "js-yaml": "^4.3.2",
+    "prettier": "^3.6.2",
+    "supertest": "^7.1.4",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vitest": "^3.2.4"
+  }
+}
