@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# 同一分支的重复推送取消旧任务，节省 CI 配额
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: 类型检查 / Lint / 测试 / 意图评估
+    runs-on: ubuntu-latest
+
+    env:
+      # 关键：CI 强制 Mock 模式，绝不调用真实 LLM（零成本、可复现）
+      # 应用层判定：LLM_API_KEY 为空 => Mock 模式
+      LLM_API_KEY: ''
+      LLM_PROVIDER: mock
+      LOG_LEVEL: silent
+      NODE_ENV: test
+      DATABASE_PATH: ./ci-sales-agent.db
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: 安装后端依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 安装前端依赖
+        run: npm ci --prefix frontend --no-audit --no-fund
+
+      - name: 后端类型检查（tsc --noEmit）
+        run: npm run typecheck
+
+      - name: 后端 ESLint
+        run: npm run lint
+
+      - name: 前端类型检查
+        run: npm run typecheck --prefix frontend
+        continue-on-error: false
+
+      - name: 前端 ESLint
+        run: npm run lint --prefix frontend
+
+      - name: 初始化数据库（建表 + seed，验证迁移可执行）
+        run: npm run init-db
+
+      - name: 单元测试 + 集成测试
+        run: npm test
+
+      - name: 覆盖率报告（阈值：核心 service ≥ 80%）
+        run: npm run test:coverage
+
+      - name: 意图分类评估（Mock 规则分类器，阈值 80%）
+        run: npm run eval:intent
+        env:
+          EVAL_MIN_ACCURACY: '80'
+
+      - name: 导出 OpenAPI 并校验接口数量
+        run: |
+          npm run openapi
+          node -e "
+            const spec = require('./docs/openapi.json');
+            const paths = Object.keys(spec.paths || {});
+            console.log('OpenAPI 路径数:', paths.length);
+            if (paths.length < 15) {
+              console.error('接口数量少于预期（15），构建失败');
+              process.exit(1);
+            }
+          "
+
+      - name: 前端生产构建
+        run: npm run build --prefix frontend
+
+      - name: 上传覆盖率报告（HTML）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+          if-no-files-found: ignore
