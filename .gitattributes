@@ -1,0 +1,46 @@
+# ============================================================
+# Git 换行符与二进制文件策略
+# 目的：跨平台（Windows 开发 / Linux 容器与 CI）保持文件内容一致，
+#      避免每次 checkout 都产生 "LF will be replaced by CRLF" 警告与
+#      行尾来回改写导致的虚假 diff。
+# ============================================================
+
+# 默认：由 Git 自动判定文本文件，仓库内统一存 LF
+* text=auto eol=lf
+
+# ---------- 二进制文件（禁止任何换行符转换） ----------
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# 数据库与归档产物
+*.db binary
+*.db-wal binary
+*.db-shm binary
+*.zip binary
+*.gz binary
+
+# ---------- 脚本：按平台约定行尾 ----------
+*.sh text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# ---------- Docker / 配置文件 ----------
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.css text eol=lf
+*.html text eol=lf
