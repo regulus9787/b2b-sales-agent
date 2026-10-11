@@ -2,6 +2,8 @@
 node_modules/
 frontend/node_modules/
 .pnpm-store/
+# 本地 npm 缓存（解决沙箱环境的缓存目录权限问题时使用，不应入库）
+.npm-cache/
 
 # ---------- 构建产物 ----------
 dist/
